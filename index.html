@@ -286,7 +286,10 @@ function falseStart(){
   G.falses++; buzz(); G.shake = 8;
   showCall('부정출발! 🚩');
   runners.forEach(r => { r.lean = 0.05; });
-  beginCountdown(2.0);
+  G.glareT = 2.2;
+  const GLARE_SFX = ['째릿', '…!', '어허', '째릿'];
+  runners.forEach((r, i) => { r.bubble = r.player ? {text:'헤헤…', t:2} : {text: GLARE_SFX[i % GLARE_SFX.length], t:1.6 + (i % 3)*0.15}; });
+  beginCountdown(2.4);
 }
 function onPlayerFinish(){
   G.finishT = G.raceT; G.flash = 1; cheer();
@@ -344,6 +347,7 @@ const laneY = i => Lay.trackTop + Lay.laneH*(i + 0.82);
 function update(dt){
   G.time += dt;
   G.shake *= Math.pow(0.02, dt);
+  G.glareT = Math.max(0, (G.glareT || 0) - dt);
   G.flash = Math.max(0, G.flash - dt*1.6);
 
   if (G.mode === 'ready'){
@@ -395,6 +399,18 @@ function update(dt){
       r.faceNow = r.finished ? (rank === 1 ? 'smug' : rank <= 3 ? 'tongue' : 'cry')
                : r.trip > 0 ? 'derp' : r.v > 9.6 ? 'scream' : r.face;
     } else if (r.finished && G.order[0] === r) r.faceNow = 'smug';
+    else if (!r.finished) r.faceNow = r.face;
+    if (G.glareT > 0){
+      if (r.player) r.faceNow = 'sheepish';
+      else {
+        r.faceNow = 'glare';
+        // 내 머리 쪽을 향한 시선/고개 방향
+        const dx = (player.x - r.x)*Lay.ppm + 6, dy = laneY(player.lane) - laneY(r.lane);
+        const d = Math.hypot(dx, dy) || 1;
+        r.look = [dx/d, dy/d];
+        r.turn = Math.max(-0.45, Math.min(0.45, dy/(Lay.laneH*5)));
+      }
+    }
 
     // 말풍선
     if (r.bubble){ r.bubble.t -= dt; if (r.bubble.t <= 0) r.bubble = null; }
@@ -585,7 +601,7 @@ function drawRunner(r, sx, sy, s){
 
   // 머리
   ctx.save(); ctx.translate(head[0] + 2, head[1] - 14);
-  ctx.rotate(lean*0.35 + Math.sin(p*2)*0.06*amp);
+  ctx.rotate(lean*0.35 + Math.sin(p*2)*0.06*amp + (r.faceNow === 'glare' ? r.turn*Math.min(1, G.glareT*4) : 0));
   drawHead(r, r.faceNow, G.time + r.seed, r.v);
   ctx.restore();
 
@@ -612,7 +628,9 @@ const headTop = r => HEADS[r.head].top + (ACC_TOP[r.acc] || 0);
 
 function headPath(h){ ctx.beginPath(); HEADS[h].prims.forEach(p => { p(ctx); ctx.closePath(); }); }
 
+let faceLook = [1, 0];
 function drawHead(r, face, t, speed){
+  faceLook = r.look || [1, 0];
   const wind = Math.min(1, speed/9);
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
 
@@ -836,6 +854,40 @@ function drawFace(face, t, skin){
       break;
     case 'smug':
       shut(...E1, true); shut(...E2, true); nose(); lips('smile', t, skin); break;
+    case 'glare': {   // 부정출발한 나를 눈 부릅뜨고 노려봄
+      const k = 1.6 + Math.sin(t*38)*0.07, [lx, ly] = faceLook;
+      wrinkles();
+      for (const [x, y] of [E1, E2]){
+        ctx.beginPath(); ctx.ellipse(x, y, 3.3*k, 3*k, 0, 0, Math.PI*2);
+        ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.3; ctx.stroke();
+        ctx.strokeStyle = 'rgba(220,70,70,.6)'; ctx.lineWidth = 0.6;      // 핏발
+        for (const a of [0.3, 2.6, 3.6, 5.8]){ ctx.beginPath(); ctx.moveTo(x + Math.cos(a)*3.2*k, y + Math.sin(a)*2.9*k); ctx.lineTo(x + Math.cos(a + 0.2)*1.8*k, y + Math.sin(a + 0.2)*1.6*k); ctx.stroke(); }
+        ctx.beginPath(); ctx.arc(x + lx*2.4*k, y + ly*2*k, 1, 0, Math.PI*2); ctx.fillStyle = INK; ctx.fill();
+        ctx.strokeStyle = INK; ctx.lineWidth = 0.9; ctx.beginPath(); ctx.arc(x, y - 0.6, 4.6*k, Math.PI*0.3, Math.PI*0.7); ctx.stroke();
+      }
+      // 화난 눈썹 (안쪽이 아래로)
+      ctx.strokeStyle = INK; ctx.lineWidth = 2.8;
+      ctx.beginPath(); ctx.moveTo(-1.5, -14.5); ctx.lineTo(8, -10.5); ctx.moveTo(10, -11); ctx.lineTo(19, -15.5); ctx.stroke();
+      nose(); lips('grit', t, skin);
+      // 💢 핏대
+      ctx.save(); ctx.translate(-2, -22); ctx.strokeStyle = '#e04848'; ctx.lineWidth = 1.6;
+      for (let q = 0; q < 4; q++){ ctx.rotate(Math.PI/2); ctx.beginPath(); ctx.moveTo(1.2, 1.2); ctx.quadraticCurveTo(1.6, 3.6, 4, 4); ctx.stroke(); }
+      ctx.restore();
+      break;
+    }
+    case 'sheepish': {  // 부정출발한 나: 머쓱
+      beady(...E1, -1.3, 0.3); beady(...E2, -1.3, 0.3);
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(0, -11); ctx.lineTo(7, -12.5); ctx.moveTo(10, -13); ctx.lineTo(17, -11.5); ctx.stroke();
+      nose(); lips('smile', t, skin);
+      ctx.fillStyle = 'rgba(255,120,140,.35)'; ctx.beginPath(); ctx.ellipse(7, 6, 4.5, 2.4, 0, 0, Math.PI*2); ctx.fill();
+      ctx.save(); ctx.translate(-5, -16 + Math.sin(t*6)*0.6);
+      ctx.beginPath(); ctx.moveTo(0, -6); ctx.quadraticCurveTo(4.5, 1, 0, 4); ctx.quadraticCurveTo(-4.5, 1, 0, -6);
+      ctx.fillStyle = 'rgba(150,205,235,.95)'; ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.fillRect(-1.6, -1, 1.4, 2);
+      ctx.restore();
+      break;
+    }
   }
 }
 
