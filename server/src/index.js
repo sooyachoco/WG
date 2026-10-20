@@ -70,19 +70,22 @@ export class Room extends DurableObject {
       return new Response(null, {status: 101, webSocket: client});
     }
 
-    const p = {id: 'p' + this.nextId++, ws: server, name, char, x: 0, v: 0, finished: false, time: null, lastPos: 0};
+    const p = {id: 'p' + this.nextId++, ws: server, name, char, x: 0, v: 0, finished: false, time: null, lastPos: 0, seen: Date.now()};
     this.players.set(p.id, p);
     if (!this.host) this.host = p.id;
     server.addEventListener('message', e => this.onMsg(p, e.data));
     const bye = () => this.leave(p);
     server.addEventListener('close', bye);
     server.addEventListener('error', bye);
+    // 조용히 죽은 연결(유령 방장 등)을 주기적으로 정리
+    if (!this.reaper) this.reaper = setInterval(() => this.reap(), 10000);
     this.send(p, {t: 'welcome', you: p.id});
     this.broadcastLobby();
     return new Response(null, {status: 101, webSocket: client});
   }
 
   onMsg(p, raw){
+    p.seen = Date.now();
     let m; try { m = JSON.parse(raw); } catch { return; }
     switch (m.t){
       case 'start':  if (p.id === this.host && (this.phase === 'lobby' || this.phase === 'results')) this.startRace(); break;
@@ -192,6 +195,14 @@ export class Room extends DurableObject {
       this.lineup = this.lineup.map(e => e && e.id === p.id ? {...e, left: true} : e);
     }
     this.broadcastLobby();
+  }
+
+  reap(){
+    const now = Date.now();
+    for (const p of [...this.players.values()]){
+      if (now - p.seen > 35000){ try { p.ws.close(4001, 'timeout'); } catch {} this.leave(p); }
+    }
+    if (!this.players.size && this.reaper){ clearInterval(this.reaper); this.reaper = null; }
   }
 
   broadcastLobby(){

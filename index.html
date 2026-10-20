@@ -240,7 +240,7 @@ const INK = '#1d1d1d';
 /* ---------- 온라인 ---------- */
 const LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 const SERVER_URL = LOCAL ? 'ws://127.0.0.1:8787' : 'wss://sprint100-rooms.sooyachoco.workers.dev';
-const NET = {ws:null, me:null, host:null, code:null, players:[], phase:'lobby', lastSend:0, leaving:false};
+const NET = {ws:null, me:null, host:null, code:null, players:[], phase:'lobby', lastSend:0, leaving:false, retry:0, beat:null, serverErr:false};
 const online = () => !!NET.ws;
 
 /* ---------- 상태 ---------- */
@@ -1585,28 +1585,39 @@ function joinRoom(){
 function connect(code){
   if (NET.ws) return;
   $('lobbyErr').textContent = '연결 중…';
-  NET.code = code; NET.leaving = false;
+  NET.code = code; NET.leaving = false; NET.serverErr = false;
   let ws;
   try { ws = new WebSocket(`${SERVER_URL}/room/${code}?name=${encodeURIComponent(G.playerName)}&char=${G.pick}`); }
   catch(e){ $('lobbyErr').textContent = '서버에 연결할 수 없어요'; return; }
   NET.ws = ws;
   ws.onopen = () => {
     $('lobbyErr').textContent = '';
+    // 아무 메시지도 없으면 회사·공유기 네트워크가 연결을 끊어버리므로 주기적으로 신호를 보냄
+    clearInterval(NET.beat); NET.beat = setInterval(() => netSend({t:'ping'}), 10000);
     try { history.replaceState(null, '', `${location.pathname}?room=${code}`); } catch(e){}
     showLobbyRoom();
   };
   ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch(_){ return; } onNet(m); };
-  ws.onclose = () => {
+  ws.onclose = ev => {
     const wasLeaving = NET.leaving;
+    NET.lastClose = ev ? ev.code : 0;
+    clearInterval(NET.beat); NET.beat = null;
     NET.ws = null; NET.me = null; NET.players = [];
     if (wasLeaving) return;
+    // 끊기면 같은 방으로 몇 번 자동 재접속
+    if (!NET.serverErr && NET.code && NET.retry < 3){
+      NET.retry++;
+      const code = NET.code;
+      setTimeout(() => { if (!NET.ws && !NET.leaving) connect(code); }, 600*NET.retry);
+    }
     // 경기 중이었다면 로비 화면으로 되돌림
     resultsEl.classList.add('hide'); callEl.className = '';
     if (G.mode !== 'lobby'){ G.mode = 'lobby'; resetRace(); buildDots(); }
     lobbyEl.classList.remove('hide');
     $('lobbyJoin').classList.remove('hide'); $('lobbyRoom').classList.add('hide');
     const err = $('lobbyErr').textContent;
-    if (!err || err === '연결 중…') $('lobbyErr').textContent = '연결이 끊겼어요. 다시 입장해 주세요.';
+    if (!NET.serverErr && NET.retry && NET.retry <= 3 && NET.code) $('lobbyErr').textContent = '연결이 끊겨서 다시 연결하는 중…';
+    else if (!err || err === '연결 중…' || err.startsWith('연결이 끊겨서')) $('lobbyErr').textContent = `연결이 끊겼어요. 다시 입장해 주세요. (코드 ${NET.lastClose || '?'})`;
   };
 }
 function leaveRoom(){
@@ -1623,12 +1634,12 @@ function leaveRoom(){
 const runnerById = id => runners.find(r => r.id === id);
 function onNet(m){
   switch (m.t){
-    case 'welcome': NET.me = m.you; break;
+    case 'welcome': NET.me = m.you; NET.retry = 0; break;
     case 'lobby':
       NET.host = m.host; NET.players = m.players; NET.phase = m.phase;
       if (G.mode === 'lobby') renderLobby();
       break;
-    case 'err': $('lobbyErr').textContent = m.msg; break;
+    case 'err': NET.serverErr = true; $('lobbyErr').textContent = m.msg; break;
     case 'mark':
       lobbyEl.classList.add('hide'); resultsEl.classList.add('hide'); selectEl.classList.add('hide');
       resetRaceOnline(m.lineup);
