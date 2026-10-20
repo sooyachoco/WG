@@ -99,6 +99,21 @@ body.touch .pad{height:96px;flex-basis:48%;font-size:40px}
 .name{flex:1 1 180px;display:flex;flex-direction:column;justify-content:center;gap:6px;font-size:16px}
 .name input{font-family:'Jua';font-size:24px;padding:10px 14px;border:3px solid var(--ink);border-radius:14px;box-shadow:0 4px 0 var(--ink);background:#fff;color:var(--ink);width:100%;outline:none}
 .name input:focus{background:#fff9db}
+/* 온라인 로비 */
+.btn.small{font-size:20px;padding:8px 20px;margin-top:8px}
+.joinrow{display:flex;gap:8px;justify-content:center;align-items:center;margin-top:10px}
+.joinrow input{font-family:'Black Han Sans',sans-serif;font-size:26px;letter-spacing:6px;text-transform:uppercase;width:170px;text-align:center;padding:8px 10px;border:3px solid var(--ink);border-radius:14px;box-shadow:0 4px 0 var(--ink);outline:none;color:var(--ink)}
+.joinrow .btn{margin-top:0}
+.roomcode{font-size:18px}
+.roomcode b{display:block;font-family:'Black Han Sans',sans-serif;font-weight:400;font-size:52px;letter-spacing:10px;color:#e63946;line-height:1.1}
+#playerList{list-style:none;margin:14px 0 4px;display:grid;grid-template-columns:repeat(2,1fr);gap:6px;text-align:left}
+#playerList li{display:flex;align-items:center;gap:8px;background:#fff;border:2.5px solid var(--ink);border-radius:12px;padding:4px 10px;font-size:16px;min-width:0}
+#playerList li span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#playerList li.me{background:#fff3b0}
+#playerList canvas{width:34px;height:34px;flex:none}
+.err{color:#d6374e;min-height:1.2em;margin-top:8px}
+.linkbtn{margin-top:10px;background:none;border:0;font-family:'Jua';font-size:16px;color:var(--ink);opacity:.65;cursor:pointer}
+.hide{display:none !important}
 @media (max-width:520px){.grid{grid-template-columns:repeat(4,1fr);gap:5px}.cc canvas{width:56px;height:56px}.cc .cn{font-size:12px}}
 </style>
 </head>
@@ -127,7 +142,10 @@ body.touch .pad{height:96px;flex-basis:48%;font-size:40px}
     <p>왼발 오른발! <span class="keys"><span class="key">←</span><span class="key">→</span></span> 번갈아 연타해서<br>세계 최고의 다리를 증명하라!</p>
     <p class="tip">같은 키 연속 입력 = 발 꼬임 · "차렷!"에서 누르면 부정출발</p>
     <div class="rivals" id="rivals"></div>
-    <button class="btn" id="startBtn">선수 선택 ▶</button>
+    <div class="btns">
+      <button class="btn" id="startBtn">혼자 달리기 ▶</button>
+      <button class="btn alt" id="onlineBtn">친구와 온라인 🌐</button>
+    </div>
   </div>
 </div>
 
@@ -141,6 +159,29 @@ body.touch .pad{height:96px;flex-basis:48%;font-size:40px}
       <button class="btn" id="againBtn">다시 달리기</button>
       <button class="btn alt" id="changeBtn">캐릭터 변경</button>
     </div>
+  </div>
+</div>
+
+<div class="overlay hide" id="lobby">
+  <div class="card">
+    <h2>온라인 방</h2>
+    <div id="lobbyJoin">
+      <p>친구에게 받은 방 코드를 넣거나 새 방을 만드세요.</p>
+      <div class="joinrow">
+        <input id="codeInput" maxlength="4" placeholder="코드 4자리" autocomplete="off" spellcheck="false">
+        <button class="btn alt small" id="joinBtn">입장</button>
+      </div>
+      <button class="btn" id="createBtn">새 방 만들기</button>
+    </div>
+    <div id="lobbyRoom" class="hide">
+      <div class="roomcode">방 코드 <b id="roomCode">----</b></div>
+      <button class="btn small alt" id="copyBtn">초대 링크 복사</button>
+      <ul id="playerList"></ul>
+      <p class="tip" id="lobbyTip"></p>
+      <button class="btn" id="hostStartBtn">시작!</button>
+    </div>
+    <p class="err" id="lobbyErr"></p>
+    <button class="linkbtn" id="leaveBtn">← 나가기</button>
   </div>
 </div>
 
@@ -196,6 +237,12 @@ const TALK = {   // 손글씨 의성어
 };
 const INK = '#1d1d1d';
 
+/* ---------- 온라인 ---------- */
+const LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const SERVER_URL = LOCAL ? 'ws://127.0.0.1:8787' : 'wss://sprint100-rooms.sooyachoco.workers.dev';
+const NET = {ws:null, me:null, host:null, code:null, players:[], phase:'lobby', lastSend:0, leaving:false};
+const online = () => !!NET.ws;
+
 /* ---------- 상태 ---------- */
 const G = {mode:'title', pick:3, playerName:'나', time:0, raceT:0, call:null, callT:0, order:[], finishT:0, shake:0, flash:0, excite:0.2, falses:0, lastSide:null, camX:-6};
 let runners = [], particles = [], W, H, DPR, Lay = {};
@@ -236,6 +283,22 @@ function resetRace(){
   player = runners.find(r => r.player);
   particles = []; G.order = []; G.raceT = 0; G.lastSide = null; G.camX = -Lay.anchor/Lay.ppm + 2; G.flash = 0;
   updatePads();
+}
+
+function resetRaceOnline(lineup){
+  runners = [];
+  lineup.forEach((e, lane) => {
+    if (!e || e.left) return;
+    const c = ROSTER[e.char] || ROSTER[0];
+    const r = {...c, lane, id:e.id, name:e.name, x:0, v:0, phase:Math.random()*6, amp:0, lean:0.05, finished:false, time:null, bubble:null, faceNow:c.face, seed:Math.random()*10, trip:0};
+    if (e.id && e.id === NET.me) r.player = true;
+    else if (e.id){ r.remote = true; r.netX = 0; r.netV = 0; r.netT = performance.now(); }
+    else { r.react = e.ai.react; r.rate = e.ai.rate; r.seed = e.ai.seed; }
+    runners.push(r);
+  });
+  player = runners.find(r => r.player) || runners[0];
+  particles = []; G.order = []; G.raceT = 0; G.lastSide = null; G.camX = -Lay.anchor/Lay.ppm + 2; G.flash = 0; G.glareT = 0;
+  updatePads(); buildDots();
 }
 
 /* ---------- 오디오 ---------- */
@@ -282,17 +345,19 @@ function startRace(){
   showCall('탕!'); bang(); G.shake = 14; G.excite = 1;
   for (let i=0;i<14;i++) particles.push({x:-0.5, y:Lay.trackTop - 10, vx:(Math.random()-0.3)*6, vy:-Math.random()*120, life:1, type:'smoke'});
 }
-function falseStart(){
+// target = 부정출발한 선수. 나머지가 모두 그쪽을 노려봄
+function falseStartFx(target){
   G.falses++; buzz(); G.shake = 8;
-  showCall('부정출발! 🚩');
+  showCall(target === player ? '부정출발! 🚩' : `${target.name} 부정출발! 🚩`);
   runners.forEach(r => { r.lean = 0.05; });
-  G.glareT = 2.2;
+  G.glareT = 2.2; G.glareTarget = target;
   const GLARE_SFX = ['째릿', '…!', '어허', '째릿'];
-  runners.forEach((r, i) => { r.bubble = r.player ? {text:'헤헤…', t:2} : {text: GLARE_SFX[i % GLARE_SFX.length], t:1.6 + (i % 3)*0.15}; });
-  beginCountdown(2.4);
+  runners.forEach((r, i) => { r.bubble = r === target ? {text:'헤헤…', t:2} : {text: GLARE_SFX[i % GLARE_SFX.length], t:1.6 + (i % 3)*0.15}; });
 }
+function falseStart(){ falseStartFx(player); beginCountdown(2.4); }
 function onPlayerFinish(){
   G.finishT = G.raceT; G.flash = 1; cheer();
+  if (online()) netSend({t:'finish', time:player.time});
   const rank = G.order.indexOf(player) + 1;
   if (rank === 1) for (let i=0;i<160;i++) particles.push(confetti());
 }
@@ -305,7 +370,10 @@ function confetti(){
 function press(side){
   ac();
   flashPad(side);
-  if (G.mode === 'ready'){ if (G.call === 'set') falseStart(); return; }
+  if (G.mode === 'ready'){
+    if (G.call === 'set'){ if (online()){ G.call = 'sent'; netSend({t:'false'}); } else falseStart(); }
+    return;
+  }
   if (G.mode !== 'race' || player.finished) return;
   if (side !== G.lastSide){
     player.v += impulseOf(player) * Math.max(0, 1 - player.v/vcapOf(player));
@@ -320,7 +388,10 @@ function press(side){
 const KEYMAP = {ArrowLeft:'L', KeyA:'L', KeyF:'L', ArrowRight:'R', KeyD:'R', KeyJ:'R'};
 addEventListener('keydown', e => {
   if (e.repeat) return;
-  if (e.target && e.target.tagName === 'INPUT'){ if (e.code === 'Enter'){ e.preventDefault(); start(); } return; }
+  if (e.target && e.target.tagName === 'INPUT'){
+    if (e.code === 'Enter'){ e.preventDefault(); if (e.target.id === 'codeInput') joinRoom(); else start(); }
+    return;
+  }
   if (G.mode === 'select'){
     const d = {ArrowLeft:-1, ArrowRight:1, ArrowUp:-4, ArrowDown:4}[e.code];
     if (d){ e.preventDefault(); selectChar((G.pick + d + ROSTER.length) % ROSTER.length); return; }
@@ -350,7 +421,7 @@ function update(dt){
   G.glareT = Math.max(0, (G.glareT || 0) - dt);
   G.flash = Math.max(0, G.flash - dt*1.6);
 
-  if (G.mode === 'ready'){
+  if (G.mode === 'ready' && !online()){
     G.callT -= dt;
     if (G.callT <= 0){
       if (G.call === 'wait'){ G.call = 'mark'; G.callT = 1.5; showCall('제자리에…', true); beep(520, 0.15); G.excite = 0.4; }
@@ -364,7 +435,15 @@ function update(dt){
   G.excite += ((G.mode==='race' ? 1 : G.mode==='done' ? 0.8 : 0.25) - G.excite) * Math.min(1, dt*1.5);
 
   for (const r of runners){
-    if (racing){
+    if (racing && r.remote){
+      // 다른 사람: 서버가 보낸 위치를 짧게 예측하며 부드럽게 따라감
+      if (r.finished) r.netV *= Math.pow(0.3, dt);
+      const ahead = Math.min(0.25, (performance.now() - r.netT)/1000);
+      const pred = r.netX + r.netV*ahead;
+      r.x += (pred - r.x)*Math.min(1, dt*10);
+      r.v = r.netV;
+      if (!r.finished && r.x >= 99.9){ r.finished = true; if (r.time == null) r.time = G.raceT; G.order.push(r); }
+    } else if (racing){
       if (r.finished) r.v *= Math.pow(0.3, dt);
       else {
         // AI는 같은 물리에 연속 연타를 넣어줌 (플레이어는 press()에서 탭마다)
@@ -401,11 +480,12 @@ function update(dt){
     } else if (r.finished && G.order[0] === r) r.faceNow = 'smug';
     else if (!r.finished) r.faceNow = r.face;
     if (G.glareT > 0){
-      if (r.player) r.faceNow = 'sheepish';
+      const tg = G.glareTarget || player;
+      if (r === tg) r.faceNow = 'sheepish';
       else {
         r.faceNow = 'glare';
-        // 내 머리 쪽을 향한 시선/고개 방향
-        const dx = (player.x - r.x)*Lay.ppm + 6, dy = laneY(player.lane) - laneY(r.lane);
+        // 부정출발한 선수의 머리 쪽을 향한 시선/고개 방향
+        const dx = (tg.x - r.x)*Lay.ppm + 6, dy = laneY(tg.lane) - laneY(r.lane);
         const d = Math.hypot(dx, dy) || 1;
         r.look = [dx/d, dy/d];
         r.turn = Math.max(-0.45, Math.min(0.45, dy/(Lay.laneH*5)));
@@ -436,8 +516,14 @@ function update(dt){
   const target = player.x - Lay.anchor/Lay.ppm;
   G.camX += (target - G.camX)*Math.min(1, dt*5);
 
-  // 결과
-  if (G.mode === 'race' && player.finished){
+  // 내 위치를 서버로 (초당 15회)
+  if (online() && G.mode === 'race' && !player.finished){
+    const now = performance.now();
+    if (now - NET.lastSend > 66){ NET.lastSend = now; netSend({t:'pos', x:+player.x.toFixed(2), v:+player.v.toFixed(2)}); }
+  }
+
+  // 결과 (온라인은 서버가 결과를 보내줌)
+  if (G.mode === 'race' && player.finished && !online()){
     const all = runners.every(r => r.finished);
     if ((all && G.raceT - G.finishT > 2.2) || G.raceT - G.finishT > 5) showResults();
   }
@@ -1310,6 +1396,17 @@ function render(){
   ctx.fillRect(px - 6, py - 5, 12, 4);
   ctx.fillStyle = OUT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(player.name, px, py - 13);
+  // 다른 사람 이름표
+  for (const r of runners){
+    if (!r.remote) continue;
+    const x = wx(r.x) + 10*s, y = laneY(r.lane) - (122 + headTop(r))*s;
+    if (x < -80 || x > W + 80) continue;
+    ctx.font = `14px 'Black Han Sans', sans-serif`;
+    const w = ctx.measureText(r.name).width + 18;
+    ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.strokeStyle = OUT; ctx.lineWidth = 2;
+    rrect(x - w/2, y - 20, w, 20, 10); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = OUT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(r.name, x, y - 9.5);
+  }
   // 말풍선
   for (const r of runners){
     if (!r.bubble) continue;
@@ -1352,17 +1449,20 @@ function avatar(r, face, size=52){
 
 /* ---------- 결과 ---------- */
 const resultsEl = document.getElementById('results');
-function showResults(){
+function showResults(serverList){
   G.mode = 'done';
-  const list = runners.map(r => ({r, time: r.finished ? r.time : G.raceT + (100 - r.x)/Math.max(r.v, 1)})).sort((a, b) => a.time - b.time);
-  const rank = list.findIndex(o => o.r === player) + 1;
-  const pt = player.time;
+  const list = serverList || runners.map(r => ({r, time: r.finished ? r.time : G.raceT + (100 - r.x)/Math.max(r.v, 1)})).sort((a, b) => a.time - b.time);
+  const mine = list.find(o => o.r.player);
+  const rank = list.indexOf(mine) + 1;
+  const pt = mine ? mine.time : null;
   const titles = {1:'🥇 금메달!', 2:'🥈 은메달!', 3:'🥉 동메달!'};
-  document.getElementById('resTitle').textContent = titles[rank] || `${rank}위… 😵`;
-  document.getElementById('resTime').textContent = pt.toFixed(2) + 's';
+  document.getElementById('resTitle').textContent = pt == null ? '기권… 😵' : titles[rank] || `${rank}위… 😵`;
+  document.getElementById('resTime').textContent = pt == null ? 'DNF' : pt.toFixed(2) + 's';
   let best = null;
-  try { best = parseFloat(localStorage.getItem('sprint100-best')); if (!best || pt < best){ localStorage.setItem('sprint100-best', pt.toFixed(2)); best = pt; } } catch(e){}
+  try { best = parseFloat(localStorage.getItem('sprint100-best')); if (pt != null && (!best || pt < best)){ localStorage.setItem('sprint100-best', pt.toFixed(2)); best = pt; } } catch(e){}
   document.getElementById('resBest').textContent = best ? `개인 최고 기록 ${best.toFixed(2)}s` + (best === pt ? ' ✨신기록!' : '') : '';
+  document.getElementById('againBtn').textContent = online() ? '로비로' : '다시 달리기';
+  document.getElementById('changeBtn').textContent = online() ? '방 나가기' : '캐릭터 변경';
   const tb = document.getElementById('resTable'); tb.innerHTML = '';
   const medal = ['🥇','🥈','🥉'];
   list.forEach((o, i) => {
@@ -1371,9 +1471,9 @@ function showResults(){
     const td = (text, cls) => { const c = document.createElement('td'); if (cls) c.className = cls; c.textContent = text; tr.appendChild(c); return c; };
     td(medal[i] || String(i + 1));
     td('').appendChild(avatar(o.r, face, 36));
-    const nm = td(o.r.player ? `${o.r.name} (YOU)` : o.r.name); if (o.r.player) nm.style.fontWeight = '700';
-    td(o.time.toFixed(2) + 's', 't');
-    td(i ? '+' + (o.time - list[0].time).toFixed(2) : '', 't').style.opacity = '.55';
+    const nm = td(o.r.player ? `${o.r.name} (YOU)` : o.r.remote ? `${o.r.name} 🌐` : o.r.name); if (o.r.player) nm.style.fontWeight = '700';
+    td(o.time == null ? 'DNF' : o.time.toFixed(2) + 's', 't');
+    td(i && o.time != null && list[0].time != null ? '+' + (o.time - list[0].time).toFixed(2) : '', 't').style.opacity = '.55';
     tb.appendChild(tr);
   });
   resultsEl.classList.remove('hide');
@@ -1388,6 +1488,7 @@ function openSelect(){
   resultsEl.classList.add('hide');
   selectEl.classList.remove('hide');
   G.mode = 'select';
+  document.getElementById('goBtn').textContent = G.wantOnline ? '온라인 방으로 ▶' : '출발선으로!';
   nameInput.value = G.playerName;
   selectChar(G.pick);
 }
@@ -1427,16 +1528,166 @@ function start(){
   try { localStorage.setItem('sprint100-profile', JSON.stringify({pick:G.pick, name:G.playerName})); } catch(e){}
   nameInput.blur();
   selectEl.classList.add('hide');
-  ac(); resetRace(); buildDots(); beginCountdown(0.5);
+  ac();
+  if (G.wantOnline){ openLobby(); return; }
+  resetRace(); buildDots(); beginCountdown(0.5);
 }
 function again(){
   resultsEl.classList.add('hide');
+  if (online()){ showLobbyRoom(); return; }
   resetRace(); buildDots(); beginCountdown(0.5);
 }
-document.getElementById('startBtn').onclick = openSelect;
-document.getElementById('goBtn').onclick = start;
-document.getElementById('againBtn').onclick = again;
-document.getElementById('changeBtn').onclick = openSelect;
+
+/* ---------- 온라인 로비 ---------- */
+const lobbyEl = document.getElementById('lobby'), codeInput = document.getElementById('codeInput');
+const $ = id => document.getElementById(id);
+const inviteCode = (new URLSearchParams(location.search).get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+if (inviteCode) $('onlineBtn').textContent = `초대받은 방 입장 (${inviteCode})`;
+
+function netSend(obj){ try { if (NET.ws && NET.ws.readyState === 1) NET.ws.send(JSON.stringify(obj)); } catch(e){} }
+function openLobby(){
+  G.mode = 'lobby';
+  lobbyEl.classList.remove('hide'); $('lobbyErr').textContent = '';
+  if (online()) return showLobbyRoom();
+  $('lobbyJoin').classList.remove('hide'); $('lobbyRoom').classList.add('hide');
+  const code = inviteCode || NET.code;
+  if (code){ codeInput.value = code; connect(code); }
+}
+function showLobbyRoom(){
+  G.mode = 'lobby';
+  lobbyEl.classList.remove('hide');
+  $('lobbyJoin').classList.add('hide'); $('lobbyRoom').classList.remove('hide');
+  renderLobby();
+}
+function renderLobby(){
+  $('roomCode').textContent = NET.code || '----';
+  const ul = $('playerList'); ul.innerHTML = '';
+  NET.players.forEach(p => {
+    const c = ROSTER[p.char] || ROSTER[0];
+    const li = document.createElement('li'); if (p.id === NET.me) li.className = 'me';
+    li.appendChild(avatar(c, c.face, 34));
+    const sp = document.createElement('span'); sp.textContent = (p.id === NET.host ? '👑 ' : '') + p.name + (p.id === NET.me ? ' (나)' : '');
+    li.appendChild(sp); ul.appendChild(li);
+  });
+  const isHost = NET.me && NET.me === NET.host;
+  $('hostStartBtn').classList.toggle('hide', !isHost);
+  $('lobbyTip').textContent = isHost ? `${NET.players.length}명 참가 중 · 빈 레인은 AI가 채워요` : '방장이 시작하길 기다리는 중…';
+}
+function makeCode(){
+  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from({length:4}, () => A[(Math.random()*A.length)|0]).join('');
+}
+function joinRoom(){
+  const code = codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length !== 4){ $('lobbyErr').textContent = '코드는 4자리예요'; return; }
+  connect(code);
+}
+function connect(code){
+  if (NET.ws) return;
+  $('lobbyErr').textContent = '연결 중…';
+  NET.code = code; NET.leaving = false;
+  let ws;
+  try { ws = new WebSocket(`${SERVER_URL}/room/${code}?name=${encodeURIComponent(G.playerName)}&char=${G.pick}`); }
+  catch(e){ $('lobbyErr').textContent = '서버에 연결할 수 없어요'; return; }
+  NET.ws = ws;
+  ws.onopen = () => {
+    $('lobbyErr').textContent = '';
+    try { history.replaceState(null, '', `${location.pathname}?room=${code}`); } catch(e){}
+    showLobbyRoom();
+  };
+  ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch(_){ return; } onNet(m); };
+  ws.onclose = () => {
+    const wasLeaving = NET.leaving;
+    NET.ws = null; NET.me = null; NET.players = [];
+    if (wasLeaving) return;
+    // 경기 중이었다면 로비 화면으로 되돌림
+    resultsEl.classList.add('hide'); callEl.className = '';
+    if (G.mode !== 'lobby'){ G.mode = 'lobby'; resetRace(); buildDots(); }
+    lobbyEl.classList.remove('hide');
+    $('lobbyJoin').classList.remove('hide'); $('lobbyRoom').classList.add('hide');
+    const err = $('lobbyErr').textContent;
+    if (!err || err === '연결 중…') $('lobbyErr').textContent = '연결이 끊겼어요. 다시 입장해 주세요.';
+  };
+}
+function leaveRoom(){
+  NET.leaving = true;
+  try { NET.ws && NET.ws.close(); } catch(e){}
+  NET.ws = null; NET.code = null; NET.me = null; NET.players = [];
+  G.wantOnline = false;
+  try { history.replaceState(null, '', location.pathname); } catch(e){}
+  lobbyEl.classList.add('hide'); resultsEl.classList.add('hide');
+  callEl.className = '';
+  resetRace(); buildDots();
+  G.mode = 'title'; $('title').classList.remove('hide');
+}
+const runnerById = id => runners.find(r => r.id === id);
+function onNet(m){
+  switch (m.t){
+    case 'welcome': NET.me = m.you; break;
+    case 'lobby':
+      NET.host = m.host; NET.players = m.players; NET.phase = m.phase;
+      if (G.mode === 'lobby') renderLobby();
+      break;
+    case 'err': $('lobbyErr').textContent = m.msg; break;
+    case 'mark':
+      lobbyEl.classList.add('hide'); resultsEl.classList.add('hide'); selectEl.classList.add('hide');
+      resetRaceOnline(m.lineup);
+      G.mode = 'ready'; G.call = 'mark'; G.excite = 0.4;
+      showCall('제자리에…', true); beep(520, 0.15);
+      break;
+    case 'set':
+      if (G.mode !== 'ready') break;
+      G.call = 'set'; G.excite = 0.05; showCall('차렷!', true); beep(700, 0.15);
+      break;
+    case 'bang': if (G.mode === 'ready') startRace(); break;
+    case 'false': {
+      const tg = runnerById(m.id); if (!tg) break;
+      G.mode = 'ready'; G.call = 'false';
+      falseStartFx(tg);
+      break;
+    }
+    case 'pos': {
+      const now = performance.now();
+      for (const [id, x, v] of m.p){
+        if (id === NET.me) continue;
+        const r = runnerById(id); if (!r) continue;
+        r.netX = x; r.netV = v; r.netT = now;
+      }
+      break;
+    }
+    case 'fin': {
+      const r = runnerById(m.id);
+      if (r && r.remote){ r.time = m.time; r.netX = Math.max(r.netX, 100); }
+      break;
+    }
+    case 'results': {
+      const list = m.list.map(e => {
+        let r = runners.find(x => x.lane === e.lane);
+        if (!r){ const c = ROSTER[e.char] || ROSTER[0]; r = {...c, name:e.name, lane:e.lane}; }
+        return {r, time: e.time};
+      });
+      showResults(list);
+      break;
+    }
+  }
+}
+
+$('startBtn').onclick = () => { G.wantOnline = false; openSelect(); };
+$('onlineBtn').onclick = () => { G.wantOnline = true; openSelect(); };
+$('goBtn').onclick = start;
+$('againBtn').onclick = again;
+$('changeBtn').onclick = () => { if (online()) leaveRoom(); else openSelect(); };
+$('createBtn').onclick = () => { codeInput.value = ''; connect(makeCode()); };
+$('joinBtn').onclick = joinRoom;
+$('hostStartBtn').onclick = () => netSend({t:'start'});
+$('leaveBtn').onclick = leaveRoom;
+$('copyBtn').onclick = async () => {
+  const link = `${location.origin}${location.pathname}?room=${NET.code}`;
+  try { await navigator.clipboard.writeText(link); $('copyBtn').textContent = '복사됨!'; }
+  catch(e){ $('copyBtn').textContent = link; }
+  setTimeout(() => { $('copyBtn').textContent = '초대 링크 복사'; }, 1800);
+};
+
 
 try { const p = JSON.parse(localStorage.getItem('sprint100-profile')); if (p){ G.pick = Math.min(ROSTER.length - 1, Math.max(0, p.pick|0)); G.playerName = String(p.name || '나').slice(0, 8); } } catch(e){}
 resize(); genScene(); resetRace(); buildDots(); buildSelect();

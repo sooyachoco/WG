@@ -1,0 +1,12 @@
+name = "sprint100-rooms"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+account_id = "a82e5be0a8064fadca42ee9101aaa8ff"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
